@@ -1,0 +1,179 @@
+#pfp block
+from tensorflow.keras import layers, Model
+def pfp(inp,IMG_SIZE,feature_width, blockname):
+    x1 =MaxPooling2D(pool_size=(2,2),padding='same',name=blockname+'x1_pool')(inp)
+    print('x1Pooling.shape{}'.format(x1.shape))
+    x1_upsampled =UpSampling2D(size=2, interpolation='bilinear', name=blockname+'x1_upsampling')(x1)
+    print('x1upsampled.shape{}'.format(x1_upsampled.shape))
+    concate_one=concatenate([inp,x1_upsampled])
+    print('x1concate.shape{}'.format(concate_one.shape))
+    # print('concate_one.shape{}'.format(concate_one))
+
+    # x2 = MaxPooling2D(pool_size=(4,4),name=blockname+'x2_pool')(concate_one)
+    # print('x2Pooling.shape{}'.format(x2.shape))
+    x2_upsampled =UpSampling2D(size=2, interpolation='bilinear', name=blockname+'x2_upsampling')(x1)
+    print('x2upsampled.shape{}'.format(x2_upsampled.shape))
+    concate_two=concatenate([concate_one,x2_upsampled,inp])
+    print('x2concate.shape{}'.format(concate_two.shape))
+    # print('concate_two.shape{}'.format(concate_two.shape))
+
+    x3=MaxPooling2D(pool_size=(8,8),name=blockname+'x3_pool')(concate_two)
+    print('x3Pooling.shape{}'.format(x3.shape))
+    x3_upsampled =UpSampling2D(size=8, interpolation='bilinear', name=blockname+'x3_upsampling')(x3)
+    # print('x3_upsampled{}'.format(x3_upsampled))
+    print('x3upsampled.shape{}'.format(x3_upsampled.shape))
+    
+    x4 = GlobalAveragePooling2D(name=blockname+'x3_pooling')(inp)
+    print('x4.shape{}'.format(x4.shape))
+    x4 = Reshape((1,1,feature_width))(x4)
+    print('x4.shape{}'.format(x4.shape))
+    x4 = Convolution2D(filters=feature_width,kernel_size=(1,1),name=blockname+'red_1_by_1')(x4)
+    print('x4.shape{}'.format(x4.shape))
+    x4 = UpSampling2D(size=IMG_SIZE,name=blockname+'red_upsampling')(x4)
+    print('x4upsampled.shape{}'.format(x4.shape))
+    concate_three=concatenate([x1_upsampled,x2_upsampled,x3_upsampled,x4,inp])
+    print('outputconcate.shape{}'.format(concate_three.shape))
+    print('---------------------------------------------')
+    print('x1_upsampled.shape{}'.format(x1_upsampled.shape))
+    print('x2_upsampled.shape{}'.format(x2_upsampled.shape))
+    print('x3_upsampled.shape{}'.format(x3_upsampled.shape))
+    print('x4.shape{}'.format(x4.shape))
+    print('INP.shape{}'.format(inp.shape))
+    # print(concate_three.shape)
+
+    return concate_three
+
+from keras import Input, Model
+import tensorflow as tf
+#Pscse
+def Pscse(inputs, ratio=16):
+
+    input_channels = inputs.shape[-1]
+    print(input_channels)
+    x = tf.keras.layers.GlobalAveragePooling2D()(inputs)
+    print(x.shape)
+    x = tf.keras.layers.Dense(input_channels // ratio, activation='relu')(x)
+    print(x.shape)
+    x = tf.keras.layers.Dense(input_channels, activation='sigmoid')(x)
+    print(x.shape)
+    x = tf.keras.layers.Reshape((1, 1, input_channels))(x)
+    print(x.shape)
+    csse = inputs * x
+    print(csse.shape)
+
+    spatial_squeeze = tf.reduce_max(csse, axis=-1, keepdims=True)
+    print(spatial_squeeze.shape)
+    spatial_excitation = tf.sigmoid(spatial_squeeze)
+    print(spatial_excitation.shape)
+    spatial_se = csse * spatial_excitation
+    print(spatial_se.shape)
+
+    return spatial_se
+
+#Recpp unet（reconv+conpsp）
+from tensorflow.keras import backend as K
+from tensorflow.keras.models import *
+K.clear_session()
+IMG_HEIGHT=128
+IMG_WIDTH=128
+IMG_CHANNELS=1
+inputs = tf.keras.layers.Input((IMG_HEIGHT, IMG_WIDTH, IMG_CHANNELS))
+s = tf.keras.layers.Lambda(lambda x: x / 255)(inputs)
+#Contraction path
+c1 = Conv2D(16, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(s)
+c1 = Dropout(0.1)(c1)
+c1 = Conv2D(16, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c1)
+c1 = Conv2D(16, (3, 3),padding='same')(c1)
+c11= Pscse(s)
+c11= concatenate([c1,c11])
+c1 = Activation('relu')(c11)
+p1 = MaxPooling2D((2, 2))(c1)
+
+c2 = Conv2D(32, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(p1)
+c2 = Dropout(0.1)(c2)
+c2 = Conv2D(32, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c2)
+c2 = Conv2D(32, (3, 3), padding='same')(c2)
+c21= Pscse(p1)
+c21= concatenate([c2,c21])
+c2 = Activation('relu')(c21)
+p2 = MaxPooling2D((2, 2))(c2)
+
+
+c3 = Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(p2)
+c3 = Dropout(0.2)(c3)
+c3 = Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c3)
+c3 = Conv2D(64, (3, 3), padding='same')(c3)
+c31= Pscse(p2)
+c31= concatenate([c3,c31])
+c3 = Activation('relu')(c31)
+p3 = MaxPooling2D((2, 2))(c3)
+
+
+c4 = Conv2D(128, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(p3)
+c4 = Dropout(0.2)(c4)
+c4 = Conv2D(128, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c4)
+c4 = Conv2D(128, (3, 3),  padding='same')(c4)
+c41= Pscse(p3)
+c41= concatenate([c4,c41])
+c4 = Activation('relu')(c41)
+p4 = MaxPooling2D(pool_size=(2, 2))(c4)
+
+
+c5 = Conv2D(256, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(p4)
+c5 = Dropout(0.3)(c5)
+c5 = Conv2D(256, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c5)
+c5 = Conv2D(256, (3, 3), padding='same')(c5)
+c51= Pscse(p4)
+c51= concatenate([c5,c51])
+c5 = Activation('relu')(c51)
+
+pyp =pfp(c5,IMG_SIZE=8,feature_width=497,blockname='test')
+# print('pyp.shape{}'.format(pyp.shape))
+print('===================================================================')
+#Expansive path
+u6 = Conv2DTranspose(128, (2, 2), strides=(2, 2), padding='same')(pyp)
+print(u6.shape)
+u6 = concatenate([u6, c4])
+print(u6.shape)
+print('u6.shape{}'.format(u6.shape))
+c6 = Conv2D(128, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(u6)
+c6 = Dropout(0.2)(c6)
+c6 = Conv2D(128, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c6)
+print(u6.shape)
+
+u7 = Conv2DTranspose(64, (2, 2), strides=(2, 2), padding='same')(c6)
+print(u7.shape)
+u7 = concatenate([u7, c3])
+print(u7.shape)
+print('u7.shape{}'.format(u7.shape))
+c7 = Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(u7)
+c7 = Dropout(0.2)(c7)
+c7 = Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c7)
+print(u7.shape)
+
+u8 = Conv2DTranspose(32, (2, 2), strides=(2, 2), padding='same')(c7)
+print(u8.shape)
+u8 = concatenate([u8, c2])
+print(u8.shape)
+print('u8.shape{}'.format(u8.shape))
+c8 = Conv2D(32, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(u8)
+c8 = Dropout(0.1)(c8)
+c8 = Conv2D(32, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c8)
+print(u8.shape)
+
+u9 = Conv2DTranspose(16, (2, 2), strides=(2, 2), padding='same')(c8)
+print(u9.shape)
+u9 = concatenate([u9, c1], axis=3)
+print(u9.shape)
+print('u9.shape{}'.format(u9.shape))
+c9 = Conv2D(16, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(u9)
+c9 = Dropout(0.1)(c9)
+c9 = Conv2D(16, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c9)
+print(u9.shape)
+
+outputs = Conv2D(1, (1, 1), activation='sigmoid')(c9)
+print(outputs.shape)
+model = Model(inputs=[inputs], outputs=[outputs])
+
+model.summary()
+
